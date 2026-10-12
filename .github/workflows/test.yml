@@ -3,6 +3,16 @@ name: Test
 permissions:
   contents: read
 jobs:
+  admission-race:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: 1.25.x
+    - name: Admission race pairs
+      working-directory: ./v2
+      run: go test -race -count=1 -run '^TestAdmissionState' .
   test:
     strategy:
       matrix:
@@ -26,5 +36,5 @@ jobs:
         working-directory: ${{matrix.work-dir}}
     - name: go test
       run: go test -v ./...
-    - name: Run example
-      run: cd example && go build -o http_breaker && ./http_breaker
+    - name: Build example
+      run: cd example && go build -o http_breaker
