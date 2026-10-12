@@ -81,6 +81,9 @@ func (s State) String() string {
 // other errors that should not affect the circuit breaker state.
 // If IsExcluded is nil, no requests are excluded.
 type Settings struct {
+	// Now supplies the native clock; nil uses time.Now. It must be concurrency-safe, nonblocking and non-reentrant.
+	// Now는 네이티브 시계이며 nil이면 time.Now를 쓴다. 동시 호출에 안전하고 차단이나 재진입이 없어야 한다.
+	Now           func() time.Time
 	Name          string
 	MaxRequests   uint32
 	Interval      time.Duration
@@ -103,6 +106,7 @@ type CircuitBreaker[T any] struct {
 	isSuccessful  func(err error) bool
 	isExcluded    func(err error) bool
 	onStateChange func(name string, from State, to State)
+	now           func() time.Time
 
 	mutex      sync.Mutex
 	state      State
@@ -118,6 +122,10 @@ func NewCircuitBreaker[T any](st Settings) *CircuitBreaker[T] {
 
 	cb.name = st.Name
 	cb.onStateChange = st.OnStateChange
+	cb.now = st.Now
+	if cb.now == nil {
+		cb.now = time.Now
+	}
 
 	if st.MaxRequests == 0 {
 		cb.maxRequests = 1
@@ -166,7 +174,7 @@ func NewCircuitBreaker[T any](st Settings) *CircuitBreaker[T] {
 		cb.isExcluded = st.IsExcluded
 	}
 
-	cb.toNewGeneration(time.Now())
+	cb.toNewGeneration(cb.now())
 
 	return cb
 }
@@ -196,7 +204,7 @@ func (cb *CircuitBreaker[T]) State() State {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 
-	now := time.Now()
+	now := cb.now()
 	state, _, _ := cb.currentState(now)
 	return state
 }
@@ -215,7 +223,7 @@ func (cb *CircuitBreaker[T]) Counts() Counts {
 // If a panic occurs in the request, the CircuitBreaker handles it as an error
 // and causes the same panic again.
 func (cb *CircuitBreaker[T]) Execute(req func() (T, error)) (T, error) {
-	generation, age, err := cb.beforeRequest()
+	_, generation, age, err := cb.beforeRequest()
 	if err != nil {
 		var defaultValue T
 		return defaultValue, err
@@ -234,28 +242,28 @@ func (cb *CircuitBreaker[T]) Execute(req func() (T, error)) (T, error) {
 	return result, err
 }
 
-func (cb *CircuitBreaker[T]) beforeRequest() (uint64, uint64, error) {
+func (cb *CircuitBreaker[T]) beforeRequest() (State, uint64, uint64, error) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 
-	now := time.Now()
+	now := cb.now()
 	state, generation, age := cb.currentState(now)
 
 	if state == StateOpen {
-		return generation, age, ErrOpenState
+		return state, generation, age, ErrOpenState
 	} else if state == StateHalfOpen && cb.counts.validRequests() >= cb.maxRequests {
-		return generation, age, ErrTooManyRequests
+		return state, generation, age, ErrTooManyRequests
 	}
 
 	cb.counts.onRequest()
-	return generation, age, nil
+	return state, generation, age, nil
 }
 
 func (cb *CircuitBreaker[T]) afterRequest(previous uint64, age uint64, err error) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 
-	now := time.Now()
+	now := cb.now()
 	state, generation, _ := cb.currentState(now)
 	if generation != previous {
 		return
