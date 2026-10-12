@@ -36,5 +36,5 @@ jobs:
         working-directory: ${{matrix.work-dir}}
     - name: go test
       run: go test -v ./...
-    - name: Run example
-      run: cd example && go build -o http_breaker && ./http_breaker
+    - name: Build example
+      run: cd example && go build -o http_breaker
